@@ -1,0 +1,29 @@
+input:
+  generate:
+    interval: '@every 2s'
+    mapping: 'root = {}'
+
+pipeline:
+  processors:
+    #- sleep:
+    #    duration: 500ms
+    - mapping: |
+        root.doc = this
+        root.id = counter()
+        root.ts = now()
+
+output:
+  broker:
+    pattern: fan_out_sequential
+    outputs:
+      - stdout: {}
+
+      - sql_raw:
+          driver: postgres
+          dsn: postgres:///dbsource?sslmode=disable
+          query: |-
+            INSERT INTO src_example (created_at) values (now())
+          args_mapping: |
+            root = [ ]
+
+      - stdout: {}

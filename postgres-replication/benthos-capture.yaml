@@ -1,0 +1,54 @@
+input:
+  generate:
+    interval: '@every 2s'
+    mapping: 'root = {}'
+
+pipeline:
+  processors:
+    #- sleep:
+    #    duration: 500ms
+    - mapping: |
+        root.doc = this
+        root.id = counter()
+        root.ts = now()
+    - sql_raw:
+        driver: postgres
+        dsn: postgres:///dbsource?sslmode=disable
+        query: |-
+          SELECT now() AS now, id, table_name, operation, old_data, new_data, transaction_time, transaction_id
+          FROM src_changes
+          WHERE publish_time IS NULL
+          ORDER BY transaction_time
+          LIMIT 5
+    - unarchive:
+        format: json_array
+    - mapping: |
+        root = this
+        root.old_data = this.old_data.parse_json(use_number: true).catch(null)
+        root.new_data = this.new_data.parse_json(use_number: true).catch(null)
+
+output:
+  broker:
+    pattern: fan_out_sequential
+    outputs:
+      - stdout: {}
+
+      - kafka:
+          addresses: [ kafka:9092 ]
+          topic: 'cdc-capture'
+        processors:
+          - mapping: 'root = {"event": this}'
+
+      - sql_raw:
+          driver: postgres
+          dsn: postgres:///dbsource?sslmode=disable
+          query: |-
+            UPDATE src_changes
+            SET publish_time = now()
+            WHERE id = $1
+          args_mapping: |
+            root = [
+              this.id,
+            ]
+
+      - stdout: {}

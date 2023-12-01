@@ -1,0 +1,49 @@
+input:
+  kafka:
+    addresses: [ kafka:9092 ]
+    topics: [ 'cdc-capture' ]
+    consumer_group: benthos_target
+
+pipeline:
+  processors:
+    - switch:
+      - check: this.event.operation == "INSERT"
+        processors:
+          - mapping: |
+              root.action = this.event.operation
+              root.table = this.event.table_name
+              root.payload = this.event.new_data
+              root.primary_key = null
+              root.ok = true
+
+      # TODO: Handle UPDATEs and DELETEs
+      - processors:
+          - mapping: |
+              root.ok = false
+
+output:
+  broker:
+    pattern: fan_out_sequential
+    outputs:
+      - stdout: {}
+
+      - switch:
+          cases:
+            - check: this.ok | false
+              output:
+                sql_raw:
+                    driver: postgres
+                    dsn: postgres:///dbtarget?sslmode=disable
+                    query: |-
+                      SELECT perform_database_operation($1, $2, $3, $4)
+                    args_mapping: |
+                      root = [
+                        this.action,
+                        this.table,
+                        this.payload.format_json().string(),
+                        this.primary_key,
+                      ]
+            - output:
+                drop: {}
+
+      - stdout: {}
